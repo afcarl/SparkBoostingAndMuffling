@@ -6,14 +6,13 @@ from pyspark.mllib.tree import RandomForest, RandomForestModel
 
 from pyspark.mllib.util import MLUtils
 
-get_ipython().magic(u'pylab inline')
-
 import numpy as np
+from numpy.random import rand
+
 from time import time
 
 from pyspark import SparkContext
 
-from numpy.random import rand
 
 class Timer:
     """A simple service class to log run time and pretty-print it.
@@ -26,7 +25,7 @@ class Timer:
         T=self.T
         return '\n'.join(['%6.2f : %s'%(T[i+1][1]-T[i][1],T[i+1][0]) for i in range(len(T)-1)])
 
-def Booster:
+class Booster:
 
 #######################################################################
 
@@ -36,7 +35,7 @@ def Booster:
         :param sc: SparkContext
         :param Data: The input RDD
 
-        :creates: the self data structures used for boosting:
+        :creates: the self data structures used for boosting :
                   T: timestamps
                   GR:  RDD for training set
                   GTR: RDD for test set
@@ -74,9 +73,11 @@ def Booster:
         self.T.stamp('add partition index')
 
         self.Prepare_data_structure(GI,GTI)
-        self.find_spits()
+        self.find_splits()
+        self.Add_Weak_structures()
 
         self.Strong_Classifier=[]
+        self.proposals=[]
         self.T.stamp('Finished Initialization')
 
     ######################################################################################
@@ -101,17 +102,6 @@ def Booster:
                   self.GTR: RDD for test set (will be used as is to compute test error).
 
         """
-         feature_no=self.feature_no
-
-        # Prepare the train and test data structures for each partition.
-        self.GR=GI.map(Prepare_partition_data_structure)
-        self.GTR=GTI.map(Prepare_partition_data_structure)
-
-        print 'number of elements in GR=', self.GR.cache().count()
-        print 'number of elements in GTR=', self.GTR.cache().count()
-        self.T.stamp('Prepare_partition_data_structure')
-
-
         def Prepare_partition_data_structure(A):
             """
             :param A: A glomed partition
@@ -144,7 +134,20 @@ def Booster:
                     'labels':labels,\
                     'weights':np.ones(len(labels)),\
                     'feature_values':columns}
+        #=========================================================================
 
+        feature_no=self.feature_no
+
+        # Prepare the train and test data structures for each partition.
+        self.GR=GI.map(Prepare_partition_data_structure)
+        self.GTR=GTI.map(Prepare_partition_data_structure)
+
+        print 'number of elements in GR=', self.GR.cache().count()
+        print 'number of elements in GTR=', self.GTR.cache().count()
+        self.T.stamp('Prepare_partition_data_structure')
+
+
+  
     ##############################################################################
     def find_splits(self,number_of_bins=10):
         """Compute the split points for each feature to create number_of_bins bins
@@ -155,11 +158,6 @@ def Booster:
                               containing the number_of_bins+1 split
                               points (the last one is "infinity")
         """
-        GR=self.GR
-        feature_no=self.feature_no
-
-        Splits=GR.map(find_split_points).collect()
-
         def find_split_points(A):
             """ A partition task: find the split points for a single feture whose index
             is A['index']%feature_no
@@ -172,8 +170,17 @@ def Booster:
             j=A['index'] % feature_no
             S=np.sort(A['feature_values'][j,:])
             L=len(S) 
-            step=int(ceil(float(L)/number_of_bins))
+            step=int(np.ceil(float(L)/number_of_bins))
             return (j,S[range(step,L,step)])
+
+        #=========================================================================
+        GR=self.GR
+        feature_no=self.feature_no
+        partition_no=GR.getNumPartitions()
+        Splits=GR.map(find_split_points).collect()
+        #Splits=[]
+        #for A in GR.collect():
+        #    Splits.append(find_split_points(A))
 
         max_no=np.array([np.finfo(float).max]) # max_no is the maximal value represented by a float
 
@@ -189,24 +196,14 @@ def Booster:
                 j+=feature_no
             Splits1.append(np.concatenate([S/n,max_no]))
 
-            self.T.stamp('Compute Split points')
         self.Splits=Splits1   # store split points array in self.Splits
+        self.T.stamp('Compute Split points')
 
     #############################################################
     def Add_Weak_structures(self):
         """Create matrix for each partition to facilitate finding the weighted errors
         of the weak rules using a single matrix multiplication
         """
-         BC_Splits_Table=sc.broadcast(self.Splits) #broadcast split points
-
-        feature_no=self.feature_no
-
-        self.PS=[None]
-        PS[0]=self.GR.map(Add_weak_learner_matrix)
-        print 'number of partitions in PS=',PS[0].cache().count()
-        self.T.stamp('Add_weak_learner_matrix')
-
-
         def Add_weak_learner_matrix(A):
             """ This procedure adds to the partition data structure the weak-rule error matrix
 
@@ -215,28 +212,41 @@ def Booster:
             :returns: input A with added field 'M'
             :rtype: dict
             """
-             feature_no=BC_feature_no.value
 
             index=A['index']%feature_no
-            SP=BC_Splits_Table.value[index]
+            Splits=BC_Splits.value[index]
 
             Col=A['feature_values'][index,:]
 
             ### The matrix M is organized as follows: 
-            # * There are as many rows as there are thresholds in SP (last one is inf)
+            # * There are as many rows as there are thresholds in Splits (last one is inf)
             # * There are as many columns as there are examples in this partition.
             # For threshold i, the i'th rw of M is +1 
-            #     if Col is smaller than the trehold SP[i] and -1 otherwise
+            #     if Col is smaller than the trehold Splits[i] and -1 otherwise
 
-            M=np.empty([len(SP),len(Col)])
+            M=np.empty([len(Splits),len(Col)])
             M[:]=np.NaN
 
-            for i in range(len(SP)):
-                M[i,:]=2*(Col<SP[i])-1
+            for i in range(len(Splits)):
+                M[i,:]=2*(Col<Splits[i])-1
 
             A['M']=M # add M matrix to the data structure.
             return A
+        #=========================================================================
 
+        BC_Splits=self.sc.broadcast(self.Splits) #broadcast split points
+
+        feature_no=self.feature_no
+
+        self.PS=[None]
+        self.PS[0]=self.GR.map(Add_weak_learner_matrix)
+        #L=[]
+        #for A in self.GR.collect():
+        #    L.append(Add_weak_learner_matrix(A))
+        #self.PS[0]=self.sc.parallelize(L)
+
+        print 'number of partitions in PS=',self.PS[0].cache().count()
+        self.T.stamp('Add_weak_learner_matrix')
 
     #############################################################
     def boosting_iteration(self):
@@ -246,36 +256,6 @@ def Booster:
         :updates: PS: appends a new RDD (all is the same other than the weight vector) to the end of the list
                   
         """
-
-         self.T.stamp('Start main loop %d'%i)
-
-        feature_no=self.feature_no
-
-        i=self.iteration
-
-        BC_Split_Table = self.sc.broadcast(self.Split_Table)
-        prop=self.PS[i].map(Find_weak).collect()
-        self.proposals.append(prop)
-
-        corrs=[p['Correlation'] for p in prop]
-        best_splitter_index=np.argmax(np.abs(corrs))
-        best_splitter = prop[best_splitter_index]
-        corr=best_splitter['Correlation']
-        best_splitter['alpha']=0.5*np.log((1+corr)/(1-corr))
-
-        BC_best_splitter=sc.broadcast(best_splitter)
-        self.Strong_Classifier.append(best_splitter)
-
-        BC_Strong_Classifier=sc.broadcast(self.Strong_Classifier)
-        self.T.stamp('found best splitter %d'%i)
-
-        newPS=self.PS[i].map(update_weights).cache()
-        newPS.count()
-        self.PS.append(newPS)
-
-        self.T.stamp('Updated Weights %d'%i)
-        self.iteration+=1
-
         def Find_weak(A):
             """Find the best split for a single feature on a single partition
 
@@ -290,7 +270,7 @@ def Booster:
             :rtype: dict
             """
             index=A['index']%feature_no
-            SP=BC_Splits_Table.value[index]
+            Splits=BC_Splits.value[index]
 
             M=A['M']
             weights=A['weights']
@@ -299,7 +279,7 @@ def Booster:
             i_max=np.argmax(np.abs(SS))
             return {'Feature_index':A['index']%feature_no,\
                     'Threshold_index':i_max,\
-                    'Threshold':SP[i_max],\
+                    'Threshold':Splits[i_max],\
                     'Correlation':SS[i_max],\
                     'SS':SS
                 }
@@ -313,30 +293,57 @@ def Booster:
             :rtype: dict
 
             """
-             best_splitter=BC_best_splitter.value
+            best_splitter=BC_best_splitter.value
 
             F_index=best_splitter['Feature_index']
             Thr=best_splitter['Threshold']
             alpha=best_splitter['alpha']
             y_hat=2*(A['feature_values'][F_index,:]<Thr)-1
             y=A['labels']
-            weights=A['weights']*exp(-alpha*y_hat*y)
+            weights=A['weights']*np.exp(-alpha*y_hat*y)
             weights /= sum(weights)
 
             A['weights']=weights
             return A
+        #=========================================================================
+
+        i=self.iteration
+
+        self.T.stamp('Start main loop %d'%i)
+
+        feature_no=self.feature_no
+
+        BC_Splits = self.sc.broadcast(self.Splits)
+        prop=self.PS[i].map(Find_weak).collect()
+
+        corrs=[p['Correlation'] for p in prop]
+        best_splitter_index=np.argmax(np.abs(corrs))
+        best_splitter = prop[best_splitter_index]
+        self.proposals.append({'iter ':i,'best feature':best_splitter_index,'details':prop})
+
+        corr=best_splitter['Correlation']
+        best_splitter['alpha']=0.5*np.log((1+corr)/(1-corr))
+
+        BC_best_splitter=self.sc.broadcast(best_splitter)
+        self.Strong_Classifier.append(best_splitter)
+
+        BC_Strong_Classifier=self.sc.broadcast(self.Strong_Classifier)
+        self.T.stamp('found best splitter %d'%i)
+
+        newPS=self.PS[i].map(update_weights).cache()
+        #L=[]
+        #for A in self.PS[i].collect():
+        #    L.append(update_weights(A))
+        #newPS=self.sc.parallelize(L).cache()
+        newPS.count()
+        self.PS.append(newPS)
+
+        self.T.stamp('Updated Weights %d'%i)
+        self.iteration+=1
+
 
     #############################################################
     def compute_scores(self):
-
-        train_scores=self.GR.map(get_scores)
-        test_scores=self.GTR.map(get_scores)
-        return train_scores,test_scores
-
-        def get_scores(A):
-            Strong_Classifier=BC_Strong_Classifier.value
-            Scores = calc_scores(Strong_Classifier,A['feature_values'],A['labels'])
-            return Scores
 
         def calc_scores(Strong_Classifier,Columns,Lbl):
 
@@ -349,6 +356,17 @@ def Booster:
                 y_hat=2*(Columns[index,:]<Thr)-1
                 Scores += alpha*y_hat*Lbl
             return Scores
+
+        def get_scores(A):
+            Strong_Classifier=BC_Strong_Classifier.value
+            Scores = calc_scores(Strong_Classifier,A['feature_values'],A['labels'])
+            return Scores
+        #=========================================================================
+
+        train_scores=self.GR.map(get_scores)
+        test_scores=self.GTR.map(get_scores)
+        return train_scores,test_scores
+
 
 ###################################################################
 def generate_data(sc):
