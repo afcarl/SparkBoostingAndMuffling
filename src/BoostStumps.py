@@ -51,7 +51,7 @@ class Booster:
         self.feature_no=len(X.features)
         partition_no=Data.getNumPartitions()
         if partition_no != self.feature_no:
-            Data=Data.repartition(feature_no).cache()
+            Data=Data.repartition(self.feature_no).cache()
         print 'number of features=',self.feature_no,'number of partitions=',Data.getNumPartitions()
 
         self.iteration=0
