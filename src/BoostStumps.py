@@ -6,6 +6,7 @@ from pyspark.mllib.tree import RandomForest, RandomForestModel
 
 from pyspark.mllib.util import MLUtils
 
+import math
 import numpy as np
 from numpy.random import rand
 
@@ -29,7 +30,7 @@ class Booster:
 
 #######################################################################
 
-    def __init__(self,sc,Data):
+    def __init__(self,sc,Data,no_of_bins=10):
         """ Given an RDD with labeled Points, create the RDD of data structures used for boosting
 
         :param sc: SparkContext
@@ -49,9 +50,10 @@ class Booster:
 
         X=Data.first()
         self.feature_no=len(X.features)
+        feature_no=self.feature_no
         partition_no=Data.getNumPartitions()
         if partition_no != self.feature_no:
-            Data=Data.repartition(self.feature_no).cache()
+            Data=Data.repartition(feature_no).cache()
         print 'number of features=',self.feature_no,'number of partitions=',Data.getNumPartitions()
 
         self.iteration=0
@@ -73,11 +75,14 @@ class Booster:
         self.T.stamp('add partition index')
 
         self.Prepare_data_structure(GI,GTI)
-        self.find_splits()
+        self.find_splits(no_of_bins)
         self.Add_Weak_structures()
 
         self.Strong_Classifier=[]
         self.proposals=[]
+        self.Training_Error=[] #added
+        self.gamma=[] #added
+        self.sum_gamma=0
         self.T.stamp('Finished Initialization')
 
     ######################################################################################
@@ -174,9 +179,11 @@ class Booster:
             return (j,S[range(step,L,step)])
 
         #=========================================================================
+        #print 'no of bins', number_of_bins
         GR=self.GR
         feature_no=self.feature_no
         partition_no=GR.getNumPartitions()
+        print 'GR no of partitions', partition_no
         Splits=GR.map(find_split_points).collect()
         #Splits=[]
         #for A in GR.collect():
@@ -239,6 +246,7 @@ class Booster:
         feature_no=self.feature_no
 
         self.PS=[None]
+        
         self.PS[0]=self.GR.map(Add_weak_learner_matrix)
         #L=[]
         #for A in self.GR.collect():
@@ -263,8 +271,8 @@ class Booster:
 
             :returns: a dict describing the added weak classifier
                     'Feature_index':   the index of the best feature
-                    'Threshold_index': the index of the best treshold (the split point)
-                    'Threshold':       the value of the best treshold 
+                    'Threshold_index': the index of the best threshold (the split point)
+                    'Threshold':       the value of the best threshold 
                     'Correlation':     the weighted correlation of the best weak rule
                     'SS':              the weighted correlations of all of the split points.
             :rtype: dict
@@ -305,6 +313,25 @@ class Booster:
 
             A['weights']=weights
             return A
+        
+        def find_Training_Error(A): ##added
+            #error=0
+            best_splitter=BC_best_splitter.value
+
+            F_index=best_splitter['Feature_index']
+            #print 'index' , F_index
+            Thr=best_splitter['Threshold']
+            #alpha=best_splitter['alpha']
+            y_hat=2*(A['feature_values'][F_index,:]<Thr)-1
+            y=A['labels']
+            weights=A['weights']
+            error=y_hat * y
+            error=(error * weights)/float(sum(weights))
+            error=error[error<0]
+            return -1*sum(error)
+            
+            
+            
         #=========================================================================
 
         i=self.iteration
@@ -326,7 +353,40 @@ class Booster:
 
         BC_best_splitter=self.sc.broadcast(best_splitter)
         self.Strong_Classifier.append(best_splitter)
-
+        '''
+        adict=self.PS[i].collect()
+        a1=adict[best_splitter_index]
+        if(best_splitter_index==0):
+            c=1
+        else:
+            c=0
+        a2=adict[c]
+        print type(adict), type(a1),type(a2)
+        weights1=a1['weights']
+        weights2=a2['weights']
+        wtest1=weights1[weights1<0]
+        wtest2=weights2[weights2<0]
+        #print 'weights1 ', len(weights1), 'weights_test ', len(wtest1) ,'weights2 ', len(weights2), 'weights_test 2', len(wtest2)
+        #print 'final ', len(weights1)+len(weights2)
+        #print 'sum ', sum(weights1)+sum(weights2)
+        '''
+        
+        E=self.PS[i].map(find_Training_Error).collect()
+        trainingError=E[best_splitter_index]
+        
+        gamma_t=0.5-trainingError
+        self.Training_Error.append(trainingError)
+        
+        self.gamma.append(gamma_t)
+        
+        expo = self.sum_gamma + (gamma_t ** 2)
+        self.sum_gamma=expo
+        
+        bound=math.exp(-2 * expo)
+        
+        #bound=0
+        print "Training Error:", trainingError, ' ,iteration: ', self.iteration , ' ,split index: ' , best_splitter_index, '  ,gamma: ',gamma_t, " ,bound: ",bound
+        
         BC_Strong_Classifier=self.sc.broadcast(self.Strong_Classifier)
         self.T.stamp('found best splitter %d'%i)
 
@@ -337,35 +397,35 @@ class Booster:
         #newPS=self.sc.parallelize(L).cache()
         newPS.count()
         self.PS.append(newPS)
-
+        
+        
         self.T.stamp('Updated Weights %d'%i)
         self.iteration+=1
 
-
     #############################################################
-    def compute_margins(self):
+    def compute_scores(self):
 
-        def calc_margins(Strong_Classifier,Columns,Lbl):
+        def calc_scores(Strong_Classifier,Columns,Lbl):
 
-            Margins=np.zeros(len(Lbl))
+            Scores=np.zeros(len(Lbl))
 
             for h in Strong_Classifier:
                 index=h['Feature_index']
                 Thr=h['Threshold']
                 alpha=h['alpha']
                 y_hat=2*(Columns[index,:]<Thr)-1
-                Margins += alpha*y_hat*Lbl
-            return Margins
+                Scores += alpha*y_hat*Lbl
+            return Scores
 
-        def get_margins(A):
+        def get_scores(A):
             Strong_Classifier=BC_Strong_Classifier.value
-            Margins = calc_margins(Strong_Classifier,A['feature_values'],A['labels'])
-            return Margins
+            Scores = calc_scores(Strong_Classifier,A['feature_values'],A['labels'])
+            return Scores
         #=========================================================================
-
-        train_margins=self.GR.map(get_margins)
-        test_margins=self.GTR.map(get_margins)
-        return train_margins,test_margins
+        
+        train_scores=self.GR.map(get_scores)
+        test_scores=self.GTR.map(get_scores)
+        return train_scores,test_scores
 
 
 ###################################################################
@@ -390,10 +450,10 @@ if __name__ == '__main__':
     sc=SparkContext()
     dataRDD = generate_data(sc)
     booster=Booster(sc,dataRDD)
-    Margins=[]
+    Scores=[]
     for i in range(10):
         booster.boosting_iteration()
-        Margins.append(booster.compute_margins())
+        Scores.append(booster.compute_scores())
     
 
 
