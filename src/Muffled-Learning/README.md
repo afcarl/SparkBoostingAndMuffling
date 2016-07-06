@@ -4,10 +4,22 @@ This is a package implementing semi-supervised learning algorithms, which learn 
 
 > Muffled Semi-Supervised Learning. Akshay Balsubramani and Yoav Freund. [Link to arXiv](http://arxiv.org/abs/1605.08833).
 
-The "muffled" formulation implemented here gives a rigorous theoretical justification for using the unlabeled data differently from typical approaches. Here, the guidance provided by the labeled data is muffled on the unlabeled data by hallucinating the opposite labels to the majority prediction. 
-
 This package is under constant revision and expansion, and so there will be implementation changes from the code used to generate the paper. The performance of the latest pulled version may be better (but not worse) than the paper's reported results. 
 
+## Files
+
+* `marvin.py`: The main script.  
+   The class `marvin` implements the loop which incrementally adds classifiers, using the base learner with hallucinated labels.
+* `slack_minimizer.py`  
+  the `slack_minimizer` minimizes the slack function. This class implements the central part of the algorithms.
+* `composite_feature.py`: creates the set of classifiers that are fed into the slack minimizer.
+* `ssb-mower.py`: A script that runs the `Hedge-Mower` family of algorithms (see below)
+* `ssutils.py` : A bunch of utility functions.
+
+## definition of base classifiers
+
+The base classifiers have to implement two methods: `fit` and `predict`, with the same signature as use in the classifiers in 
+ scikit-learn, see for example [scikit-learn/DecisionTreeClassifier](http://scikit-learn.org/stable/modules/generated/sklearn.tree.DecisionTreeClassifier.html#sklearn.tree.DecisionTreeClassifier)
 
 ## System Requirements
 - Python v2.7.11, NumPy v1.10.4, SciPy v0.17.0 (All are standard latest stable releases. Earlier versions may work, as Marvin only uses basic matrix and linear algebra functionality.)
