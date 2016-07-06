@@ -28,6 +28,9 @@ The base classifiers have to implement two methods: `fit` and `predict`, with th
 
 
 ## Example Usage
+
+**Add Here** Full details for how to install, configure, get data files and run a script that tests the software on a known medium size dataset (covtype)
+
 Working examples are provided in scripts, each generating a basic CSV log file (details in header source comments):
 
 1. `slack_minimizer.py`: 
