@@ -343,29 +343,29 @@ class Booster:
 
 
     #############################################################
-    def compute_scores(self):
+    def compute_margins(self):
 
-        def calc_scores(Strong_Classifier,Columns,Lbl):
+        def calc_margins(Strong_Classifier,Columns,Lbl):
 
-            Scores=np.zeros(len(Lbl))
+            Margins=np.zeros(len(Lbl))
 
             for h in Strong_Classifier:
                 index=h['Feature_index']
                 Thr=h['Threshold']
                 alpha=h['alpha']
                 y_hat=2*(Columns[index,:]<Thr)-1
-                Scores += alpha*y_hat*Lbl
-            return Scores
+                Margins += alpha*y_hat*Lbl
+            return Margins
 
-        def get_scores(A):
+        def get_margins(A):
             Strong_Classifier=BC_Strong_Classifier.value
-            Scores = calc_scores(Strong_Classifier,A['feature_values'],A['labels'])
-            return Scores
+            Margins = calc_margins(Strong_Classifier,A['feature_values'],A['labels'])
+            return Margins
         #=========================================================================
 
-        train_scores=self.GR.map(get_scores)
-        test_scores=self.GTR.map(get_scores)
-        return train_scores,test_scores
+        train_margins=self.GR.map(get_margins)
+        test_margins=self.GTR.map(get_margins)
+        return train_margins,test_margins
 
 
 ###################################################################
@@ -390,10 +390,10 @@ if __name__ == '__main__':
     sc=SparkContext()
     dataRDD = generate_data(sc)
     booster=Booster(sc,dataRDD)
-    Scores=[]
+    Margins=[]
     for i in range(10):
         booster.boosting_iteration()
-        Scores.append(booster.compute_scores())
+        Margins.append(booster.compute_margins())
     
 
 
