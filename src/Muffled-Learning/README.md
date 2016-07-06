@@ -1,5 +1,7 @@
 # Marvin
 
+**Working on** renaming private methods as _XX and writing full docstrings for Sphinx.
+
 This is a package implementing semi-supervised learning algorithms, which learn a binary classifier from independently drawn sets of labeled and unlabeled data. This package contains an implementation of the `Marvin` and `Hedge-Mower` algorithms in the paper: 
 
 > Muffled Semi-Supervised Learning. Akshay Balsubramani and Yoav Freund. [Link to arXiv](http://arxiv.org/abs/1605.08833).
