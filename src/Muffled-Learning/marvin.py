@@ -59,8 +59,8 @@ class Marvin (object):
         # Initialize with the best single (generalist) hypothesis, on just the labeled data.
         if (init_hyp is None):# and (wlearner is not None):
             init_hyp = self.wlearner.fit(self.labeled_set, self.labels)
-        self.add_composite_feature (init_hyp, total_correction=False, correction_duration=10, stepsize=3.0, 
-                               failure_prob=0.01, numsamp_min=0, mode='topk', k=0)
+        self._add_composite_feature (init_hyp, total_correction=False, correction_duration=10, stepsize=3.0, 
+            failure_prob=0.01, numsamp_min=0, mode='topk', k=0)
         
         
     def newhyp(self, indices_this_iteration=[]):
@@ -139,8 +139,8 @@ class Marvin (object):
                 k = 0
                 
             #TODO: check this line for unl_indices_this_iteration
-            self.add_composite_feature (newhyp, total_correction=correct_this_iteration, correction_duration=10, 
-                                   stepsize=stepsize, failure_prob=failure_prob, numsamp_min=numsamp_min, mode=mode, k=k, tol=tol)
+            self._add_composite_feature (newhyp, total_correction=correct_this_iteration, correction_duration=10, 
+                stepsize=stepsize, failure_prob=failure_prob, numsamp_min=numsamp_min, mode=mode, k=k, tol=tol)
             
             print 'Length of weight vector, iteration ' + str(iterct) + ': ' + str(self.sigma.shape[0])
             
@@ -190,7 +190,7 @@ class Marvin (object):
         return sklearn.metrics.roc_auc_score(data_labels, self.predict(dataset))
     
     
-    def add_composite_feature (self, newtree, total_correction=False, correction_duration=10, stepsize=None, 
+    def _add_composite_feature (self, newtree, total_correction=False, correction_duration=10, stepsize=None, 
                           failure_prob=0.01, numsamp_min=0, mode='topk', k=0, tol=0.00005):
         # y_transform is false because decision trees actually make the right predictions when trained directly and not through the RF class.
         treefeat = composite_feature.composite_feature(newtree, self.holdout_set, self.holdout_labels, failure_prob=failure_prob, k=k, numsamp_min=numsamp_min)
@@ -294,7 +294,6 @@ if __name__ == "__main__":
     failure_prob = float(sys.argv[5])
     k = int(sys.argv[6])
     modesetting = sys.argv[7]
-    num_MCtrials = int(sys.argv[8])
 
     TOTAL_SIZE = LABELED_SET_SIZE+UNLABEL_SET_SIZE+HOLDOUT_SET_SIZE+HOLDOUT_SET2_SIZE
     (x_all, y_all) = read_data (labeled_file, TOTAL_SIZE)
@@ -306,4 +305,4 @@ if __name__ == "__main__":
         holdout_set=x_out, holdout_labels=y_out, outdiag_set=x_out2, outdiag_labels=y_out2)
 
     statauc, (lab_particles, unl_particles, out_particles) = k.boost (50, #one_at_a_time=True, 
-        mode='topk', k=0, failure_prob=0.1, correction_duration=5000, numsamp_min=0, unl_stride=True, unl_stride_size=10)
+        mode=modesetting, k=k, failure_prob=failure_prob, correction_duration=5000, numsamp_min=0, unl_stride=True, unl_stride_size=10)
