@@ -314,24 +314,6 @@ class Booster:
             A['weights']=weights
             return A
         
-        def find_Training_Error(A): ##added
-            #error=0
-            best_splitter=BC_best_splitter.value
-
-            F_index=best_splitter['Feature_index']
-            #print 'index' , F_index
-            Thr=best_splitter['Threshold']
-            #alpha=best_splitter['alpha']
-            y_hat=2*(A['feature_values'][F_index,:]<Thr)-1
-            y=A['labels']
-            weights=A['weights']
-            error=y_hat * y
-            error=(error * weights)
-            error=error[error<0]
-            return -1*sum(error)
-            
-            
-            
         #=========================================================================
 
         i=self.iteration
@@ -353,39 +335,6 @@ class Booster:
 
         BC_best_splitter=self.sc.broadcast(best_splitter)
         self.Strong_Classifier.append(best_splitter)
-        '''
-        adict=self.PS[i].collect()
-        a1=adict[best_splitter_index]
-        if(best_splitter_index==0):
-            c=1
-        else:
-            c=0
-        a2=adict[c]
-        print type(adict), type(a1),type(a2)
-        weights1=a1['weights']
-        weights2=a2['weights']
-        wtest1=weights1[weights1<0]
-        wtest2=weights2[weights2<0]
-        #print 'weights1 ', len(weights1), 'weights_test ', len(wtest1) ,'weights2 ', len(weights2), 'weights_test 2', len(wtest2)
-        #print 'final ', len(weights1)+len(weights2)
-        #print 'sum ', sum(weights1)+sum(weights2)
-        '''
-        
-        E=self.PS[i].map(find_Training_Error).collect()
-        trainingError=E[best_splitter_index]
-        
-        gamma_t=0.5-trainingError
-        self.Training_Error.append(trainingError)
-        
-        self.gamma.append(gamma_t)
-        
-        expo = self.sum_gamma + (gamma_t ** 2)
-        self.sum_gamma=expo
-        
-        bound=math.exp(-2 * expo)
-        
-        #bound=0
-        print "Training Error:", trainingError, ' ,iteration: ', self.iteration , ' ,split index: ' , best_splitter_index, '  ,gamma: ',gamma_t, " ,bound: ",bound
         
         BC_Strong_Classifier=self.sc.broadcast(self.Strong_Classifier)
         self.T.stamp('found best splitter %d'%i)
@@ -395,13 +344,12 @@ class Booster:
         #for A in self.PS[i].collect():
         #    L.append(update_weights(A))
         #newPS=self.sc.parallelize(L).cache()
-        newPS.count()
+        #newPS.count()
         self.PS.append(newPS)
         
         
         self.T.stamp('Updated Weights %d'%i)
         self.iteration+=1
-
 
     #############################################################
     def compute_scores(self):
@@ -423,9 +371,35 @@ class Booster:
             Scores = calc_scores(Strong_Classifier,A['feature_values'],A['labels'])
             return Scores
         #=========================================================================
+        BC_Strong_Classifier=self.sc.broadcast(self.Strong_Classifier)
         
-        train_scores=self.GR.map(get_scores)
-        test_scores=self.GTR.map(get_scores)
+        train_scores=self.GR.flatMap(get_scores).collect()
+        test_scores=self.GTR.flatMap(get_scores).collect()
+        
+        itr=self.iteration
+        AList=self.PS[itr-1].collect()
+        
+        weights=np.empty(0)
+        for A in AList:
+            weights=np.concatenate((weights, A['weights']),axis=0)
+        
+        training_misclassified_indices=[i for i in range(len(train_scores)) if train_scores[i]<0]
+        misclassified_weights=weights[training_misclassified_indices]
+        
+        training_error=np.sum(misclassified_weights)*1.0/np.sum(weights)
+        
+        gamma_t=0.5-training_error
+        self.Training_Error.append(training_error)
+        self.gamma.append(gamma_t)
+        expo = self.sum_gamma + (gamma_t ** 2)
+        self.sum_gamma=expo
+        bound=math.exp(-2 * expo)
+        
+        ## Not weighted, absolute misclassification rate
+        test_misclassified=[1 for i in test_scores if i<0]
+        test_error=np.sum(test_misclassified)*1.0/len(test_scores)
+        
+        print 'train error ' , training_error, ' ,test error: ', test_error, ' ,bound ' ,bound
         return train_scores,test_scores
 
 
@@ -442,7 +416,6 @@ def generate_data(sc):
             print "%1.0f "%((1+y)/2),
             data.append(LabeledPoint(y,[i,j]))
         print
-
 
     return sc.parallelize(data)
     
